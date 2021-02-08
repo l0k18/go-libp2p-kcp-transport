@@ -19,7 +19,8 @@ import (
 	"github.com/libp2p/go-libp2p-core/pnet"
 	tpt "github.com/libp2p/go-libp2p-core/transport"
 	p2ptls "github.com/libp2p/go-libp2p-tls"
-	quic "github.com/lucas-clemente/quic-go"
+	"github.com/lucas-clemente/quic-go"
+	quiclogging "github.com/lucas-clemente/quic-go/logging"
 	ma "github.com/multiformats/go-multiaddr"
 	mafmt "github.com/multiformats/go-multiaddr-fmt"
 	manet "github.com/multiformats/go-multiaddr/net"
@@ -28,6 +29,11 @@ import (
 var log = logging.Logger("quic-transport")
 
 var quicDialContext = quic.DialContext // so we can mock it in tests
+
+// dialTracingKey is set on the context when dialing connections.
+var dialTracingKey = dialTracingCtxKey{}
+
+type dialTracingCtxKey struct{}
 
 var quicConfig = &quic.Config{
 	MaxIncomingStreams:         1000,
@@ -128,7 +134,15 @@ func NewTransport(key ic.PrivKey, psk pnet.PSK, gater connmgr.ConnectionGater) (
 	if _, err := io.ReadFull(keyReader, config.StatelessResetKey); err != nil {
 		return nil, err
 	}
-	config.Tracer = tracer
+	peerID, err := peer.IDFromPrivateKey(key)
+	if err != nil {
+		return nil, err
+	}
+	tracers := []quiclogging.Tracer{&metricsTracer{}, newStatsTracer(peerID)}
+	if qlogTracer != nil {
+		tracers = append(tracers, qlogTracer)
+	}
+	config.Tracer = quiclogging.NewMultiplexedTracer(tracers...)
 
 	return &transport{
 		privKey:      key,
@@ -160,7 +174,7 @@ func (t *transport) Dial(ctx context.Context, raddr ma.Multiaddr, p peer.ID) (tp
 	if err != nil {
 		return nil, err
 	}
-	sess, err := quicDialContext(ctx, pconn, addr, host, tlsConf, t.clientConfig)
+	sess, err := quicDialContext(context.WithValue(ctx, dialTracingKey, p), pconn, addr, host, tlsConf, t.clientConfig)
 	if err != nil {
 		pconn.DecreaseCount()
 		return nil, err
