@@ -74,20 +74,25 @@ func (l *listener) Accept() (tpt.CapableConn, error) {
 			sess.CloseWithError(errorCodeConnectionGating, "connection gated")
 			continue
 		}
+
+		// return through active hole punching if any
+		hpkey := sess.RemoteAddr().String()
+		l.transport.holePunchingMx.Lock()
+		holePunch, ok := l.transport.holePunching[hpkey]
+		l.transport.holePunchingMx.Unlock()
+		if ok {
+			select {
+			case holePunch.connCh <- conn:
+				continue
+			case <-holePunch.ctx.Done():
+			}
+		}
+
 		return conn, nil
 	}
 }
 
 func (l *listener) setupConn(sess quic.Session) (*conn, error) {
-	// cancel active hole punching if any
-	hpkey := sess.RemoteAddr().String()
-	l.transport.holePunchingMx.Lock()
-	cancel, ok := l.transport.holePunching[hpkey]
-	if ok {
-		cancel()
-	}
-	l.transport.holePunchingMx.Unlock()
-
 	// The tls.Config used to establish this connection already verified the certificate chain.
 	// Since we don't have any way of knowing which tls.Config was used though,
 	// we have to re-determine the peer's identity here.

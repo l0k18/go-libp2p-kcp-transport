@@ -105,10 +105,15 @@ type transport struct {
 	gater        connmgr.ConnectionGater
 
 	holePunchingMx sync.Mutex
-	holePunching   map[string]context.CancelFunc
+	holePunching   map[string]activeHolePunch
 }
 
 var _ tpt.Transport = &transport{}
+
+type activeHolePunch struct {
+	connCh chan tpt.CapableConn
+	ctx    context.Context
+}
 
 // NewTransport creates a new QUIC transport
 func NewTransport(key ic.PrivKey, psk pnet.PSK, gater connmgr.ConnectionGater) (tpt.Transport, error) {
@@ -148,7 +153,7 @@ func NewTransport(key ic.PrivKey, psk pnet.PSK, gater connmgr.ConnectionGater) (
 		serverConfig: config,
 		clientConfig: config.Clone(),
 		gater:        gater,
-		holePunching: make(map[string]context.CancelFunc),
+		holePunching: make(map[string]activeHolePunch),
 	}, nil
 }
 
@@ -170,11 +175,7 @@ func (t *transport) Dial(ctx context.Context, raddr ma.Multiaddr, p peer.ID) (tp
 
 	if simConnect, _ := in.GetSimultaneousConnect(ctx); simConnect {
 		if bytes.Compare([]byte(t.localPeer), []byte(p)) < 0 {
-			err = t.holePunch(ctx, p, network, addr)
-			if err == nil {
-				err = ErrHolePunching
-			}
-			return nil, err
+			return t.holePunch(ctx, p, network, addr)
 		}
 	}
 
@@ -224,19 +225,21 @@ func (t *transport) Dial(ctx context.Context, raddr ma.Multiaddr, p peer.ID) (tp
 	return conn, nil
 }
 
-func (t *transport) holePunch(ctx context.Context, p peer.ID, network string, addr *net.UDPAddr) error {
+func (t *transport) holePunch(ctx context.Context, p peer.ID, network string, addr *net.UDPAddr) (tpt.CapableConn, error) {
 	pconn, err := t.connManager.Dial(network, addr)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer pconn.DecreaseCount()
 
 	ctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 
+	connCh := make(chan tpt.CapableConn)
+
 	hpkey := addr.String()
 	t.holePunchingMx.Lock()
-	t.holePunching[hpkey] = cancel
+	t.holePunching[hpkey] = activeHolePunch{connCh: connCh, ctx: ctx}
 	t.holePunchingMx.Unlock()
 
 	defer func() {
@@ -251,12 +254,12 @@ func (t *transport) holePunch(ctx context.Context, p peer.ID, network string, ad
 	for i := 0; true; i++ {
 		_, err = rand.Read(payload)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		_, err = conn.WriteToUDP(payload, addr)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		maxSleep := time.Duration((i+1)*(i+1)) * 10 * time.Millisecond
@@ -265,13 +268,15 @@ func (t *transport) holePunch(ctx context.Context, p peer.ID, network string, ad
 		}
 		sleep := 10*time.Millisecond + time.Duration(rand.Intn(int(maxSleep)))
 		select {
+		case conn := <-connCh:
+			return conn, nil
 		case <-time.After(sleep):
 		case <-ctx.Done():
-			return nil
+			return nil, ErrHolePunching
 		}
 	}
 
-	return nil
+	return nil, ErrHolePunching
 }
 
 // Don't use mafmt.QUIC as we don't want to dial DNS addresses. Just /ip{4,6}/udp/quic
