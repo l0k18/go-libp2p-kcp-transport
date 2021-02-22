@@ -232,7 +232,7 @@ func (t *transport) holePunch(ctx context.Context, p peer.ID, network string, ad
 	}
 	defer pconn.DecreaseCount()
 
-	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
 	connCh := make(chan tpt.CapableConn)
