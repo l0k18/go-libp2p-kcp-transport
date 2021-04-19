@@ -1,6 +1,7 @@
 package libp2pquic
 
 import (
+	"context"
 	"net"
 	"sync"
 	"time"
@@ -164,7 +165,9 @@ func init() {
 
 type metricsTracer struct{}
 
-func (m *metricsTracer) TracerForConnection(p logging.Perspective, connID logging.ConnectionID) logging.ConnectionTracer {
+var _ logging.Tracer = &metricsTracer{}
+
+func (m *metricsTracer) TracerForConnection(_ context.Context, p logging.Perspective, connID logging.ConnectionID) logging.ConnectionTracer {
 	return &metricsConnTracer{perspective: p, connID: connID}
 }
 
