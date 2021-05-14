@@ -1,4 +1,4 @@
-# go-libp2p-quic-transport
+# go-libp2p-kcp-transport
 
 [![](https://img.shields.io/badge/project-libp2p-yellow.svg?style=flat-square)](https://libp2p.io/)
 [![Godoc Reference](https://img.shields.io/badge/godoc-reference-blue.svg?style=flat-square)](https://godoc.org/github.com/l0k18/go-libp2p-kcp-transport)
